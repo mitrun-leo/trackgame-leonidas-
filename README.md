@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>陸上大会 管理ツール（複数種目・複数組・得点集計）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 10px;
+      line-height: 1.4;
+    }
+    h1 {
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+    h2 {
+      font-size: 16px;
+      margin: 16px 0 8px;
+    }
+    h3 {
+      font-size: 14px;
+      margin: 8px 0;
+    }
+    .global-buttons, .event-header, .heat-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    button {
+      padding: 6px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: #f8f8f8;
+    }
+    button:active {
+      transform: scale(0.98);
+    }
+    label {
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    input[type="text"] {
+      padding: 4px 6px;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+    .event-block {
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 8px;
+      margin: 10px 0;
+      background: #fafafa;
+    }
+    .event-header {
+      align-items: center;
+    }
+    .event-header input {
+      min-width: 120px;
+    }
+    .event-points-info {
+      font-size: 11px;
+      color: #555;
+      margin-top: 2px;
+    }
+    .heats-container {
+      margin-top: 4px;
+    }
+    .event-summary {
+      margin-top: 8px;
+    }
+    .heat-block {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 6px;
+      margin-top: 8px;
+      background: #fff;
+    }
+    .table-wrapper {
+      width: 100%;
+      overflow-x: auto;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      min-width: 600px;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 4px 6px;
+      text-align: center;
+      white-space: nowrap;
+    }
+    th {
+      background: #f0f0f0;
+    }
+    .lane-cell {
+      width: 40px;
+    }
+    .rank-cell, .points-cell {
+      width: 40px;
+    }
+    .info {
+      font-size: 11px;
+      color: #555;
+    }
+    #teamScoresTable {
+      max-width: 500px;
+    }
+    @media (max-width: 600px) {
+      .global-buttons, .event-header, .heat-buttons {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      button {
+        width: 100%;
+      }
+      input[type="text"] {
+        width: 100%;
+      }
+      h1 {
+        font-size: 16px;
+      }
+    }
+    @media print {
+      .no-print {
+        display: none !important;
+      }
+      body {
+        margin: 10mm;
+        font-size: 11px;
+      }
+      table {
+        font-size: 11px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>陸上大会 管理ツール（複数種目・複数組・得点集計）</h1>
+  <p class="info no-print">
+    ・「種目を追加」で100m・1500mなどを増やせます。<br>
+    ・各種目内で「組を追加」で1組・2組…を追加。<br>
+    ・タイム入力 → 「全種目 集計」で順位・得点が自動計算（種目内の全組をまとめて判定）。<br>
+    ・得点配分は<strong>種目ごと</strong>に設定できます。<br>
+    ・「保存」でブラウザに保存、「読み込み」で復元できます（同じ端末・同じブラウザで有効）。<br>
+    ・「リセット」で全データ削除＋初期状態に戻ります。<br>
+    ・「PDF用リザルト表示」→ 結果だけを並べた画面が開くので、ブラウザの印刷機能からPDF保存してください。
+  </p>
+
+  <div class="global-buttons no-print">
+    <button onclick="addEvent()">種目を追加</button>
+    <button onclick="calculateAll()">全種目 集計（順位・得点）</button>
+    <button onclick="calculateTeamScores()">チーム得点を更新</button>
+    <button onclick="openPdfResults()">PDF用リザルト表示</button>
+    <button onclick="saveData()">保存</button>
+    <button onclick="loadData(false)">読み込み</button>
+    <button onclick="resetAll()">リセット</button>
+  </div>
+
+  <div id="eventsContainer"></div>
+
+  <h2>チーム別総合得点</h2>
+  <p class="info">
+    全種目の得点を合算しています。「全種目 集計」または「チーム得点を更新」ボタンで更新されます。
+  </p>
+  <div class="table-wrapper">
+    <table id="teamScoresTable">
+      <thead>
+        <tr>
+          <th>順位</th>
+          <th>チーム</th>
+          <th>得点</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- 自動生成 -->
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    let eventCounter = 0;
+    const STORAGE_KEY = "leonidas_meet_saved_v1";
+
+    // ページ読み込み時：保存データがあれば自動復元、なければデフォルト1種目作成
+    window.addEventListener('DOMContentLoaded', () => {
+      const restored = loadData(true); // 静かに試す
+      if (!restored) {
+        addEvent("100m", "男子");
+      }
+    });
+
+    // ★ 保存
+    function saveData() {
+      try {
+        const eventsContainer = document.getElementById("eventsContainer");
+        if (!eventsContainer) return;
+        const data = {
+          eventsHtml: eventsContainer.innerHTML
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        alert("現在の内容を保存しました。");
+      } catch (e) {
+        console.error(e);
+        alert("保存に失敗しました。ブラウザの設定を確認してください。");
+      }
+    }
+
+    // ★ 読み込み（isInitial=true のときはアラートなし）
+    function loadData(isInitial) {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (!saved) {
+          if (!isInitial) alert("保存されたデータがありません。");
+          return false;
+        }
+        const data = JSON.parse(saved);
+        const eventsContainer = document.getElementById("eventsContainer");
+        eventsContainer.innerHTML = data.eventsHtml || "";
+
+        // eventCounter を現在の種目数から復元
+        const events = document.querySelectorAll(".event-block");
+        eventCounter = events.length;
+
+        if (!isInitial) {
+          alert("保存された内容を読み込みました。");
+        }
+        return true;
+      } catch (e) {
+        console.error(e);
+        if (!isInitial) alert("読み込みに失敗しました。");
+        return false;
+      }
+    }
+
+    // ★ 全データリセット（保存データ削除＋画面初期化）
+    function resetAll() {
+      const ok = confirm("全ての種目・入力データ・保存データを削除して初期化します。よろしいですか？");
+      if (!ok) return;
+      try {
+        // 保存データ削除
+        localStorage.removeItem(STORAGE_KEY);
+
+        // 画面初期化
+        const eventsContainer = document.getElementById("eventsContainer");
+        eventsContainer.innerHTML = "";
+
+        // 種目カウンターもリセット
+        eventCounter = 0;
+
+        // 初期種目を作成
+        addEvent("100m", "男子");
+
+        // チーム得点も空にする
+        const tbody = document.querySelector("#teamScoresTable tbody");
+        if (tbody) tbody.innerHTML = "";
+
+        alert("リセットしました。新しい大会を開始できます。");
+      } catch (e) {
+        console.error(e);
+        alert("リセットに失敗しました。");
+      }
+    }
+
+    // ★ 種目ごとの得点配分を取得
+    function getPointsTableForEvent(eventBlock) {
+      const input = eventBlock.querySelector(".points-scheme-input");
+      if (!input) return [10, 8, 6, 5, 4, 3, 2, 1];
+
+      const text = String(input.value || "").trim();
+      if (!text) return [10, 8, 6, 5, 4, 3, 2, 1];
+
+      const parts = text.split(",");
+      const nums = parts
+        .map(p => parseInt(p.trim(), 10))
+        .filter(v => !isNaN(v));
+
+      if (nums.length === 0) {
+        return [10, 8, 6, 5, 4, 3, 2, 1];
+      }
+      return nums;
+    }
+
+    // 種目追加
+    function addEvent(defaultName = "", defaultCategory = "") {
+      eventCounter++;
+      const container = document.getElementById("eventsContainer");
+
+      const eventDiv = document.createElement("div");
+      eventDiv.className = "event-block";
+      eventDiv.dataset.eventId = eventCounter;
+
+      eventDiv.innerHTML = `
+        <div class="event-header no-print">
+          <label>種目名
+            <input type="text" class="event-name" value="${defaultName}">
+          </label>
+          <label>カテゴリ
+            <input type="text" class="event-category" value="${defaultCategory}" placeholder="例：男子中学 100m">
+          </label>
+          <label>得点配分
+            <input type="text" class="points-scheme-input"
+              value="10,8,6,5,4,3,2,1"
+              placeholder="例: 5,3,1">
+          </label>
+          <button type="button" onclick="addHeat(this)">組を追加</button>
+        </div>
+        <div class="event-points-info no-print">
+          ※この種目だけの得点配分をカンマ区切りで指定できます（例：<code>10,8,6,5,4,3,2,1</code> / <code>5,3,1</code>など）
+        </div>
+        <div class="heats-container"></div>
+        <div class="event-summary"></div>
+      `;
+
+      container.appendChild(eventDiv);
+
+      // デフォルトで1組追加
+      const addHeatBtn = eventDiv.querySelector("button[onclick^='addHeat']");
+      addHeat(addHeatBtn);
+    }
+
+    // 組追加
+    function addHeat(button) {
+      const eventBlock = button.closest(".event-block");
+      const heatsContainer = eventBlock.querySelector(".heats-container");
+      const currentHeats = heatsContainer.querySelectorAll(".heat-block");
+      const heatNumber = currentHeats.length + 1;
+
+      const heatDiv = document.createElement("div");
+      heatDiv.className = "heat-block";
+      heatDiv.dataset.heatNumber = heatNumber;
+
+      heatDiv.innerHTML = `
+        <h3>第${heatNumber}組</h3>
+        <div class="heat-buttons no-print">
+          <button type="button" onclick="addRow(this)">行を追加</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th class="lane-cell">レーン</th>
+                <th>ナンバー</th>
+                <th>選手名</th>
+                <th>所属</th>
+                <th>タイム<br><span class="info">例) 12.34 / 1:57.89</span></th>
+                <th>順位</th>
+                <th>得点</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${generateInitialRows(8)}
+            </tbody>
+          </table>
+        </div>
+      `;
+      heatsContainer.appendChild(heatDiv);
+    }
+
+    // 初期行（n行分）を生成
+    function generateInitialRows(n) {
+      let html = "";
+      for (let i = 1; i <= n; i++) {
+        html += `
+          <tr>
+            <td class="lane-cell">${i}</td>
+            <td><input type="text" class="number-input"></td>
+            <td><input type="text" class="name-input"></td>
+            <td><input type="text" class="team-input"></td>
+            <td><input type="text" class="time-input"></td>
+            <td class="rank-cell"></td>
+            <td class="points-cell"></td>
+          </tr>
+        `;
+      }
+      return html;
+    }
+
+    // 行追加（1組の中）※9人目以降はレーン空欄
+    function addRow(button) {
+      const heatBlock = button.closest(".heat-block");
+      const tbody = heatBlock.querySelector("tbody");
+      const rowCount = tbody.rows.length + 1;
+      const laneText = rowCount <= 8 ? rowCount : "";
+
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td class="lane-cell">${laneText}</td>
+        <td><input type="text" class="number-input"></td>
+        <td><input type="text" class="name-input"></td>
+        <td><input type="text" class="team-input"></td>
+        <td><input type="text" class="time-input"></td>
+        <td class="rank-cell"></td>
+        <td class="points-cell"></td>
+      `;
+      tbody.appendChild(row);
+    }
+
+    // タイム文字列を秒に変換
+    function parseTimeToSeconds(str) {
+      if (!str) return null;
+      str = String(str).trim();
+      if (!str) return null;
+
+      const parts = str.split(":");
+      let seconds = 0;
+
+      if (parts.length === 1) {
+        const s = parseFloat(parts[0]);
+        if (isNaN(s)) return null;
+        seconds = s;
+      } else if (parts.length === 2) {
+        const min = parseInt(parts[0], 10);
+        const sec = parseFloat(parts[1]);
+        if (isNaN(min) || isNaN(sec)) return null;
+        seconds = min * 60 + sec;
+      } else {
+        return null;
+      }
+      return seconds;
+    }
+
+    // 全種目集計
+    function calculateAll() {
+      const events = document.querySelectorAll(".event-block");
+      events.forEach(eventBlock => {
+        calculateEvent(eventBlock);
+      });
+      calculateTeamScores();
+      alert("全種目の順位・得点を集計しました。");
+    }
+
+    // 1種目の順位・得点計算（全組まとめて）＋総合結果テーブル
+    function calculateEvent(eventBlock) {
+      const heatBlocks = eventBlock.querySelectorAll(".heat-block");
+      const timedRows = [];
+
+      heatBlocks.forEach(heat => {
+        const rows = heat.querySelectorAll("tbody tr");
+        rows.forEach(row => {
+          const timeInput = row.querySelector(".time-input");
+          const timeStr = timeInput.value;
+          const timeSec = parseTimeToSeconds(timeStr);
+
+          const rankCell = row.querySelector(".rank-cell");
+          const pointsCell = row.querySelector(".points-cell");
+
+          if (timeSec === null) {
+            rankCell.textContent = "";
+            pointsCell.textContent = "";
+          } else {
+            timedRows.push({ row, timeSec });
+          }
+        });
+      });
+
+      // タイムでソート（速い順）
+      timedRows.sort((a, b) => a.timeSec - b.timeSec);
+
+      // この種目専用の得点配分を取得
+      const pointsTable = getPointsTableForEvent(eventBlock);
+
+      // 順位・得点を付与
+      timedRows.forEach((item, index) => {
+        const rank = index + 1;
+        const row = item.row;
+        const rankCell = row.querySelector(".rank-cell");
+        const pointsCell = row.querySelector(".points-cell");
+
+        rankCell.textContent = rank;
+        pointsCell.textContent = pointsTable[index] !== undefined ? pointsTable[index] : 0;
+      });
+
+      // 種目別総合結果テーブル生成（上位から順）
+      const summaryContainer = eventBlock.querySelector(".event-summary");
+      if (summaryContainer) {
+        let html = `
+          <h3>種目別総合結果（順位順）</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>順位</th>
+                  <th>レーン</th>
+                  <th>ナンバー</th>
+                  <th>選手名</th>
+                  <th>所属</th>
+                  <th>タイム</th>
+                  <th>得点</th>
+                </tr>
+              </thead>
+              <tbody>
+        `;
+
+        timedRows.forEach(item => {
+          const row = item.row;
+          const rank = row.querySelector(".rank-cell")?.textContent || "";
+          const lane = row.querySelector(".lane-cell")?.textContent || "";
+          const number = row.querySelector(".number-input")?.value || "";
+          const name = row.querySelector(".name-input")?.value || "";
+          const team = row.querySelector(".team-input")?.value || "";
+          const time = row.querySelector(".time-input")?.value || "";
+          const points = row.querySelector(".points-cell")?.textContent || "";
+
+          if (!name.trim() && !team.trim() && !time.trim()) {
+            return;
+          }
+
+          html += `
+            <tr>
+              <td>${escapeHtml(rank)}</td>
+              <td>${escapeHtml(lane)}</td>
+              <td>${escapeHtml(number)}</td>
+              <td>${escapeHtml(name)}</td>
+              <td>${escapeHtml(team)}</td>
+              <td>${escapeHtml(time)}</td>
+              <td>${escapeHtml(points)}</td>
+            </tr>
+          `;
+        });
+
+        html += `
+              </tbody>
+            </table>
+          </div>
+        `;
+        summaryContainer.innerHTML = html;
+      }
+    }
+
+    // チーム得点集計
+    function calculateTeamScores() {
+      const teamPointsMap = new Map();
+
+      const rows = document.querySelectorAll(".heat-block tbody tr");
+      rows.forEach(row => {
+        const teamInput = row.querySelector(".team-input");
+        const pointsCell = row.querySelector(".points-cell");
+
+        if (!teamInput || !pointsCell) return;
+
+        const teamName = String(teamInput.value || "").trim();
+        if (!teamName) return;
+
+        const pts = parseInt(pointsCell.textContent || "0", 10);
+        if (isNaN(pts) || pts <= 0) return;
+
+        const prev = teamPointsMap.get(teamName) || 0;
+        teamPointsMap.set(teamName, prev + pts);
+      });
+
+      const teamArray = Array.from(teamPointsMap.entries())
+        .map(([team, points]) => ({ team, points }))
+        .sort((a, b) => b.points - a.points);
+
+      const tbody = document.querySelector("#teamScoresTable tbody");
+      tbody.innerHTML = "";
+
+      teamArray.forEach((item, index) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${index + 1}</td>
+          <td>${item.team}</td>
+          <td>${item.points}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // PDF用リザルト画面を新しいタブで開く
+    function openPdfResults() {
+      // 最新にしておく
+      const events = document.querySelectorAll(".event-block");
+      events.forEach(eventBlock => {
+        calculateEvent(eventBlock);
+      });
+      calculateTeamScores();
+
+      const win = window.open("", "_blank");
+      if (!win) {
+        alert("ポップアップがブロックされました。ブラウザ設定で許可してください。");
+        return;
+      }
+
+      let html = `
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+          <meta charset="UTF-8">
+          <title>大会リザルト（PDF用）</title>
+          <style>
+            body {
+              font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              margin: 10mm;
+              font-size: 11px;
+            }
+            h1 { font-size: 18px; margin-bottom: 6px; }
+            h2 { font-size: 14px; margin: 12px 0 4px; }
+            h3 { font-size: 12px; margin: 8px 0 4px; }
+            table {
+              border-collapse: collapse;
+              width: 100%;
+              font-size: 11px;
+              margin-bottom: 8px;
+            }
+            th, td {
+              border: 1px solid #000;
+              padding: 3px 4px;
+              text-align: center;
+              white-space: nowrap;
+            }
+            th {
+              background: #eee;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>大会リザルト</h1>
+          <p style="font-size:10px;">※ブラウザの「印刷」機能からPDFとして保存してください。</p>
+      `;
+
+      // 種目ごとのリザルト
+      events.forEach(eventBlock => {
+        const eventName = eventBlock.querySelector(".event-name")?.value || "";
+        const eventCategory = eventBlock.querySelector(".event-category")?.value || "";
+        const pointsTable = getPointsTableForEvent(eventBlock);
+
+        html += `<h2>${escapeHtml(eventCategory || eventName || "種目")}</h2>`;
+        html += `<p style="font-size:10px;">得点配分：${escapeHtml(pointsTable.join(", "))}</p>`;
+
+        const heatBlocks = eventBlock.querySelectorAll(".heat-block");
+        const overallRows = [];
+
+        heatBlocks.forEach(heat => {
+          const heatNo = heat.dataset.heatNumber || "";
+          html += `<h3>第${escapeHtml(heatNo)}組</h3>`;
+
+          html += `
+            <table>
+              <thead>
+                <tr>
+                  <th>レーン</th>
+                  <th>ナンバー</th>
+                  <th>選手名</th>
+                  <th>所属</th>
+                  <th>タイム</th>
+                  <th>順位</th>
+                  <th>得点</th>
+                </tr>
+              </thead>
+              <tbody>
+          `;
+
+          const rows = heat.querySelectorAll("tbody tr");
+          rows.forEach(row => {
+            const lane = row.querySelector(".lane-cell")?.textContent || "";
+            const number = row.querySelector(".number-input")?.value || "";
+            const name = row.querySelector(".name-input")?.value || "";
+            const team = row.querySelector(".team-input")?.value || "";
+            const time = row.querySelector(".time-input")?.value || "";
+            const rank = row.querySelector(".rank-cell")?.textContent || "";
+            const points = row.querySelector(".points-cell")?.textContent || "";
+
+            if (!name.trim() && !team.trim() && !time.trim()) {
+              return;
+            }
+
+            html += `
+              <tr>
+                <td>${escapeHtml(lane)}</td>
+                <td>${escapeHtml(number)}</td>
+                <td>${escapeHtml(name)}</td>
+                <td>${escapeHtml(team)}</td>
+                <td>${escapeHtml(time)}</td>
+                <td>${escapeHtml(rank)}</td>
+                <td>${escapeHtml(points)}</td>
+              </tr>
+            `;
+
+            overallRows.push({
+              lane,
+              number,
+              name,
+              team,
+              time,
+              rank: rank ? parseInt(rank, 10) : null,
+              points
+            });
+          });
+
+          html += `</tbody></table>`;
+        });
+
+        // 種目別総合結果（順位順）
+        const validOverall = overallRows.filter(r => r.rank !== null && !isNaN(r.rank));
+        if (validOverall.length > 0) {
+          validOverall.sort((a, b) => a.rank - b.rank);
+          html += `
+            <h3>種目別総合結果（順位順）</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>順位</th>
+                  <th>レーン</th>
+                  <th>ナンバー</th>
+                  <th>選手名</th>
+                  <th>所属</th>
+                  <th>タイム</th>
+                  <th>得点</th>
+                </tr>
+              </thead>
+              <tbody>
+          `;
+          validOverall.forEach(r => {
+            html += `
+              <tr>
+                <td>${escapeHtml(String(r.rank))}</td>
+                <td>${escapeHtml(r.lane)}</td>
+                <td>${escapeHtml(r.number)}</td>
+                <td>${escapeHtml(r.name)}</td>
+                <td>${escapeHtml(r.team)}</td>
+                <td>${escapeHtml(r.time)}</td>
+                <td>${escapeHtml(r.points)}</td>
+              </tr>
+            `;
+          });
+          html += `</tbody></table>`;
+        }
+      });
+
+      // チーム得点
+      const teamRows = document.querySelectorAll("#teamScoresTable tbody tr");
+      if (teamRows.length > 0) {
+        html += `<h2>チーム別総合得点</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>順位</th>
+                <th>チーム</th>
+                <th>得点</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        teamRows.forEach(tr => {
+          const tds = tr.querySelectorAll("td");
+          html += `
+            <tr>
+              <td>${escapeHtml(tds[0]?.textContent || "")}</td>
+              <td>${escapeHtml(tds[1]?.textContent || "")}</td>
+              <td>${escapeHtml(tds[2]?.textContent || "")}</td>
+            </tr>
+          `;
+        });
+        html += `</tbody></table>`;
+      }
+
+      html += `
+        </body>
+        </html>
+      `;
+
+      win.document.open();
+      win.document.write(html);
+      win.document.close();
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+  </script>
+</body>
+</html>
